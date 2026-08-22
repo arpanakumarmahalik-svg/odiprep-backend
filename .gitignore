@@ -1,0 +1,22 @@
+# Virtual environment
+venv/
+
+# Environment variables — never upload this!
+.env
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Uploaded files — too large for GitHub
+uploads/
+answer_sheets/
+tests/
+
+# VS Code settings
+.vscode/
+
+# Test files
+test_*.py
+handwriting_test.jpg
