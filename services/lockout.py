@@ -1,6 +1,7 @@
 from supabase import create_client
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
+from services.supabase_service import get_test_history, get_dashboard_stats
 import os
 
 load_dotenv()
@@ -157,3 +158,25 @@ def get_all_lockouts(user_id: str) -> list:
     except Exception as e:
         print(f"Get lockouts error: {type(e).__name__}: {e}")
         return []
+
+@router.get("/test-history/{user_id}")
+def fetch_test_history(user_id: str):
+    """
+    Get all past tests for a student.
+    Used on the Test History page.
+    """
+    history = get_test_history(user_id)
+    return {
+        "user_id": user_id,
+        "total_tests": len(history),
+        "history": history
+    }
+
+
+@router.get("/dashboard-stats/{user_id}")
+def fetch_dashboard_stats(user_id: str):
+    """
+    Get dashboard summary stats for a student.
+    Used on the Dashboard page.
+    """
+    return get_dashboard_stats(user_id)
