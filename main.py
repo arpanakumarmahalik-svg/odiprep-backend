@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routers import upload, test, results, lockout
+from routers import upload, test, results, proctoring
 import os
 
 app = FastAPI(
@@ -17,7 +17,7 @@ os.makedirs("answer_sheets", exist_ok=True)
 app.include_router(upload.router)
 app.include_router(test.router)
 app.include_router(results.router)
-app.include_router(lockout.router)
+app.include_router(proctoring.router)
 
 @app.get("/")
 def read_root():
