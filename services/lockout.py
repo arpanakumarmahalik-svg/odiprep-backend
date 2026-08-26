@@ -1,163 +1,60 @@
-from supabase import create_client
-from dotenv import load_dotenv
-from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from services.lockout import report_violation, check_lock_status, get_all_lockouts
 from services.supabase_service import get_test_history, get_dashboard_stats
-import os
 
-load_dotenv()
-
-# Connect to Supabase
-supabase = create_client(
-    os.getenv("SUPABASE_URL"),
-    os.getenv("SUPABASE_KEY")
-)
+router = APIRouter()
 
 
-def report_violation(user_id: str, subject: str, test_id: str) -> dict:
+class ViolationRequest(BaseModel):
+    user_id: str
+    subject: str
+    test_id: str
+
+
+@router.post("/report-violation")
+def report_exam_violation(request: ViolationRequest):
     """
-    Called when a student switches tabs during an exam.
-    Locks that subject for 3 hours for that student.
+    Called immediately when a student switches tabs during exam.
+    Ends the test and locks the subject for 3 hours.
     """
-    try:
-        # Calculate lockout end time — 3 hours from now
-        locked_until = datetime.now(timezone.utc) + timedelta(hours=3)
-        locked_until_str = locked_until.isoformat()
+    result = report_violation(
+        user_id=request.user_id,
+        subject=request.subject,
+        test_id=request.test_id
+    )
 
-        # Check if a lockout already exists for this user + subject
-        existing = supabase.table("exam_lockouts").select("*").eq(
-            "user_id", user_id
-        ).eq(
-            "subject", subject
-        ).execute()
+    if "error" in result:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to record violation: {result['error']}"
+        )
 
-        if existing.data:
-            # Update existing lockout — reset the 3 hours
-            result = supabase.table("exam_lockouts").update({
-                "locked_until": locked_until_str,
-                "test_id": test_id
-            }).eq(
-                "user_id", user_id
-            ).eq(
-                "subject", subject
-            ).execute()
-        else:
-            # Create new lockout record
-            result = supabase.table("exam_lockouts").insert({
-                "user_id": user_id,
-                "subject": subject,
-                "test_id": test_id,
-                "locked_until": locked_until_str
-            }).execute()
-
-        return {
-            "locked": True,
-            "subject": subject,
-            "locked_until": locked_until_str,
-            "message": f"Subject '{subject}' locked for 3 hours due to exam violation."
-        }
-
-    except Exception as e:
-        print(f"Lockout error: {type(e).__name__}: {e}")
-        return {"locked": False, "error": str(e)}
+    return result
 
 
-def check_lock_status(user_id: str, subject: str) -> dict:
+@router.get("/lock-status/{user_id}/{subject}")
+def get_lock_status(user_id: str, subject: str):
     """
-    Check if a subject is currently locked for a student.
-    Returns locked status and time remaining.
+    Check if a subject is locked for a student.
+    Frontend calls this before allowing a new test to start.
     """
-    try:
-        now = datetime.now(timezone.utc)
-
-        result = supabase.table("exam_lockouts").select("*").eq(
-            "user_id", user_id
-        ).eq(
-            "subject", subject
-        ).execute()
-
-        if not result.data:
-            return {
-                "locked": False,
-                "subject": subject,
-                "message": "Subject is available for testing."
-            }
-
-        lockout = result.data[0]
-        locked_until = datetime.fromisoformat(lockout["locked_until"])
-
-        # Check if lockout has expired
-        if now >= locked_until:
-            # Lockout expired — delete it
-            supabase.table("exam_lockouts").delete().eq(
-                "user_id", user_id
-            ).eq(
-                "subject", subject
-            ).execute()
-
-            return {
-                "locked": False,
-                "subject": subject,
-                "message": "Subject is available for testing."
-            }
-
-        # Still locked — calculate time remaining
-        time_remaining = locked_until - now
-        hours = int(time_remaining.total_seconds() // 3600)
-        minutes = int((time_remaining.total_seconds() % 3600) // 60)
-        seconds = int(time_remaining.total_seconds() % 60)
-
-        return {
-            "locked": True,
-            "subject": subject,
-            "locked_until": lockout["locked_until"],
-            "time_remaining": f"{hours:02d}:{minutes:02d}:{seconds:02d}",
-            "message": f"Subject '{subject}' is locked for {hours}h {minutes}m {seconds}s."
-        }
-
-    except Exception as e:
-        print(f"Lock status error: {type(e).__name__}: {e}")
-        return {"locked": False, "error": str(e)}
+    return check_lock_status(user_id=user_id, subject=subject)
 
 
-def get_all_lockouts(user_id: str) -> list:
+@router.get("/all-lockouts/{user_id}")
+def get_student_lockouts(user_id: str):
     """
-    Get all current lockouts for a student.
-    Used to show locked/available status on dashboard.
+    Get all active lockouts for a student.
+    Used on dashboard to show locked/available subjects.
     """
-    try:
-        now = datetime.now(timezone.utc)
+    lockouts = get_all_lockouts(user_id=user_id)
+    return {
+        "user_id": user_id,
+        "active_lockouts": lockouts,
+        "total_locked": len(lockouts)
+    }
 
-        result = supabase.table("exam_lockouts").select("*").eq(
-            "user_id", user_id
-        ).execute()
-
-        active_lockouts = []
-
-        for lockout in result.data:
-            locked_until = datetime.fromisoformat(lockout["locked_until"])
-
-            if now < locked_until:
-                time_remaining = locked_until - now
-                hours = int(time_remaining.total_seconds() // 3600)
-                minutes = int((time_remaining.total_seconds() % 3600) // 60)
-                seconds = int(time_remaining.total_seconds() % 60)
-
-                active_lockouts.append({
-                    "subject": lockout["subject"],
-                    "locked_until": lockout["locked_until"],
-                    "time_remaining": f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                })
-            else:
-                # Clean up expired lockouts
-                supabase.table("exam_lockouts").delete().eq(
-                    "id", lockout["id"]
-                ).execute()
-
-        return active_lockouts
-
-    except Exception as e:
-        print(f"Get lockouts error: {type(e).__name__}: {e}")
-        return []
 
 @router.get("/test-history/{user_id}")
 def fetch_test_history(user_id: str):

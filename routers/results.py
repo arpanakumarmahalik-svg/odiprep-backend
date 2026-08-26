@@ -1,5 +1,4 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from services.supabase_service import save_test_history
 from typing import Annotated, List
 import os
 import uuid
@@ -10,6 +9,7 @@ from services.gemini import (
     match_answers_to_questions,
     evaluate_answers
 )
+from services.supabase_service import save_test_history
 
 router = APIRouter()
 
@@ -21,7 +21,6 @@ def run_evaluation(test_data: dict, saved_photos: list) -> dict:
     Full evaluation pipeline:
     Read handwriting → Match answers → Evaluate marks
     """
-
     test_type = test_data["test_type"]
     sections_with_answers = test_data["sections_with_answers"]
 
@@ -40,13 +39,7 @@ def run_evaluation(test_data: dict, saved_photos: list) -> dict:
         section_a_qs = sections_with_answers["section_a"]["questions"]
         section_b_qs = sections_with_answers["section_b"]["questions"]
         section_c_qs = sections_with_answers["section_c"]["questions"]
-
-        all_questions = (
-            section_a_qs +
-            section_b_qs +
-            section_c_qs
-        )
-
+        all_questions = section_a_qs + section_b_qs + section_c_qs
         total_marks = 70
 
     elif test_type == "internal":
@@ -59,25 +52,14 @@ def run_evaluation(test_data: dict, saved_photos: list) -> dict:
 
     # Step 4: Match answers to questions
     print("Matching answers to questions...")
-    matched = match_answers_to_questions(
-        extracted_text,
-        all_questions,
-        test_type
-    )
+    matched = match_answers_to_questions(extracted_text, all_questions, test_type)
 
     # Step 5: Evaluate and assign marks
     print("Evaluating answers...")
-    evaluation = evaluate_answers(
-        matched,
-        all_questions,
-        test_type
-    )
+    evaluation = evaluate_answers(matched, all_questions, test_type)
 
     # Step 6: Fill in unattempted questions with 0 marks
-    evaluated_q_nos = [
-        q["question_no"]
-        for q in evaluation["evaluated_questions"]
-    ]
+    evaluated_q_nos = [q["question_no"] for q in evaluation["evaluated_questions"]]
 
     for q in all_questions:
         if q["question_no"] not in evaluated_q_nos:
@@ -92,26 +74,14 @@ def run_evaluation(test_data: dict, saved_photos: list) -> dict:
             })
 
     # Step 7: Sort by question number
-    evaluation["evaluated_questions"].sort(
-        key=lambda x: x["question_no"]
-    )
+    evaluation["evaluated_questions"].sort(key=lambda x: x["question_no"])
 
     # Step 8: Recalculate totals correctly
-    total_awarded = sum(
-        q["marks_awarded"]
-        for q in evaluation["evaluated_questions"]
-    )
-
-    total_possible = sum(
-        q["marks_total"]
-        for q in evaluation["evaluated_questions"]
-    )
-
-    percentage = (
-        round((total_awarded / total_possible) * 100, 1)
-        if total_possible > 0
-        else 0
-    )
+    total_awarded = sum(q["marks_awarded"] for q in evaluation["evaluated_questions"])
+    total_possible = sum(q["marks_total"] for q in evaluation["evaluated_questions"])
+    percentage = round(
+        (total_awarded / total_possible) * 100, 1
+    ) if total_possible > 0 else 0
 
     evaluation["total_awarded"] = total_awarded
     evaluation["total_possible"] = total_possible
@@ -119,57 +89,29 @@ def run_evaluation(test_data: dict, saved_photos: list) -> dict:
 
     # Step 9: Section breakdown for SCETVT
     if test_type == "scetvt":
-
-        section_a_nos = [
-            q["question_no"]
-            for q in section_a_qs
-        ]
-
-        section_b_nos = [
-            q["question_no"]
-            for q in section_b_qs
-        ]
-
-        section_c_nos = [
-            q["question_no"]
-            for q in section_c_qs
-        ]
+        section_a_nos = [q["question_no"] for q in section_a_qs]
+        section_b_nos = [q["question_no"] for q in section_b_qs]
+        section_c_nos = [q["question_no"] for q in section_c_qs]
 
         def section_score(evaluated, q_nos):
-            qs = [
-                q for q in evaluated
-                if q["question_no"] in q_nos
-            ]
-
+            qs = [q for q in evaluated if q["question_no"] in q_nos]
             return {
-                "score": sum(
-                    q["marks_awarded"]
-                    for q in qs
-                ),
-                "total": sum(
-                    q["marks_total"]
-                    for q in qs
-                )
+                "score": sum(q["marks_awarded"] for q in qs),
+                "total": sum(q["marks_total"] for q in qs)
             }
 
         evaluation["section_breakdown"] = {
             "section_a": section_score(
-                evaluation["evaluated_questions"],
-                section_a_nos
+                evaluation["evaluated_questions"], section_a_nos
             ),
-
             "section_b": section_score(
-                evaluation["evaluated_questions"],
-                section_b_nos
+                evaluation["evaluated_questions"], section_b_nos
             ),
-
             "section_c": section_score(
-                evaluation["evaluated_questions"],
-                section_c_nos
+                evaluation["evaluated_questions"], section_c_nos
             )
         }
 
-    # Step 10: Add test information
     evaluation["test_type"] = test_type
     evaluation["subject"] = test_data["subject"]
     evaluation["total_marks"] = total_marks
@@ -182,13 +124,8 @@ async def submit_test(
     test_id: Annotated[str, Form()],
     answer_sheets: Annotated[List[UploadFile], File()]
 ):
-
     # Step 1: Check test exists
-    test_path = os.path.join(
-        "tests",
-        f"{test_id}.json"
-    )
-
+    test_path = os.path.join("tests", f"{test_id}.json")
     if not os.path.exists(test_path):
         raise HTTPException(
             status_code=404,
@@ -213,49 +150,24 @@ async def submit_test(
         "image/jpg",
         "image/webp"
     ]
-
     for sheet in answer_sheets:
-
         if sheet.content_type not in allowed_image_types:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"Only image files allowed. "
-                    f"Got: {sheet.content_type}"
-                )
+                detail=f"Only image files allowed. Got: {sheet.content_type}"
             )
 
     # Step 5: Save uploaded photos
     submission_id = str(uuid.uuid4())
-
     saved_photos = []
-
-    submission_folder = os.path.join(
-        ANSWER_SHEETS_FOLDER,
-        submission_id
-    )
-
-    os.makedirs(
-        submission_folder,
-        exist_ok=True
-    )
+    submission_folder = os.path.join(ANSWER_SHEETS_FOLDER, submission_id)
+    os.makedirs(submission_folder, exist_ok=True)
 
     for index, sheet in enumerate(answer_sheets):
-
         content = await sheet.read()
-
-        extension = (
-            sheet.filename.split(".")[-1].lower()
-        )
-
-        photo_filename = (
-            f"page_{index + 1}.{extension}"
-        )
-
-        photo_path = os.path.join(
-            submission_folder,
-            photo_filename
-        )
+        extension = sheet.filename.split(".")[-1].lower()
+        photo_filename = f"page_{index + 1}.{extension}"
+        photo_path = os.path.join(submission_folder, photo_filename)
 
         with open(photo_path, "wb") as f:
             f.write(content)
@@ -264,122 +176,63 @@ async def submit_test(
             "page_number": index + 1,
             "filename": photo_filename,
             "path": photo_path,
-            "size_kb": round(
-                len(content) / 1024,
-                2
-            )
+            "size_kb": round(len(content) / 1024, 2)
         })
 
-    print(
-        f"Saved {len(saved_photos)} photos "
-        f"for test {test_id}"
-    )
+    print(f"Saved {len(saved_photos)} photos for test {test_id}")
 
     # Step 6: Update status to submitted
     test_data["status"] = "submitted"
-
-    test_data["submitted_at"] = (
-        datetime.utcnow().isoformat()
-    )
-
+    test_data["submitted_at"] = datetime.utcnow().isoformat()
     test_data["submission_id"] = submission_id
-
     test_data["answer_sheet_photos"] = saved_photos
 
     with open(test_path, "w") as f:
-        json.dump(
-            test_data,
-            f,
-            indent=2
-        )
+        json.dump(test_data, f, indent=2)
 
     # Step 7: Start evaluation automatically
     print("Starting evaluation...")
-
     try:
-
-        evaluation_result = run_evaluation(
-            test_data,
-            saved_photos
-        )
+        evaluation_result = run_evaluation(test_data, saved_photos)
 
         # Save results into test file
         test_data["status"] = "evaluated"
-
         test_data["results"] = evaluation_result
-
-        test_data["evaluated_at"] = (
-            datetime.utcnow().isoformat()
-        )
+        test_data["evaluated_at"] = datetime.utcnow().isoformat()
 
         with open(test_path, "w") as f:
-            json.dump(
-                test_data,
-                f,
-                indent=2
-            )
+            json.dump(test_data, f, indent=2)
 
-        print(
-            f"Evaluation complete! "
-            f"Score: "
-            f"{evaluation_result['total_awarded']}/"
-            f"{evaluation_result['total_possible']}"
+        print(f"Evaluation complete! Score: {evaluation_result['total_awarded']}/{evaluation_result['total_possible']}")
+
+        # Step 8: Save to Supabase test history
+        save_test_history(
+            user_id=test_data.get("user_id", "anonymous"),
+            test_id=test_id,
+            subject=test_data["subject"],
+            test_type=test_data["test_type"],
+            total_score=float(evaluation_result["total_awarded"]),
+            total_marks=int(evaluation_result["total_possible"]),
+            percentage=float(evaluation_result["percentage"]),
+            status="evaluated"
         )
-
-        # Save test history in Supabase
-        if test_data.get("status") == "evaluated":
-
-            save_test_history(
-                user_id=test_data.get(
-                    "user_id",
-                    "anonymous"
-                ),
-                test_id=test_id,
-                subject=test_data["subject"],
-                test_type=test_data["test_type"],
-                total_score=evaluation_result[
-                    "total_awarded"
-                ],
-                total_marks=evaluation_result[
-                    "total_possible"
-                ],
-                percentage=evaluation_result[
-                    "percentage"
-                ],
-                status="evaluated"
-            )
-
-            print(
-                "Test history saved successfully in Supabase."
-            )
 
     except Exception as e:
+        print(f"Evaluation error: {e}")
 
-        print(
-            f"Evaluation error: {e}"
-        )
-
-    # Step 8: Return response
     return {
         "submission_id": submission_id,
         "test_id": test_id,
         "subject": test_data["subject"],
         "pages_received": len(saved_photos),
         "status": test_data["status"],
-        "message": (
-            "Answer sheets received and evaluation "
-            "complete! Call /get-results to see your marks."
-        )
+        "message": "Answer sheets received and evaluation complete! Call /get-results to see your marks."
     }
 
 
 @router.get("/get-results/{test_id}")
 def get_results(test_id: str):
-
-    test_path = os.path.join(
-        "tests",
-        f"{test_id}.json"
-    )
+    test_path = os.path.join("tests", f"{test_id}.json")
 
     if not os.path.exists(test_path):
         raise HTTPException(
@@ -390,67 +243,33 @@ def get_results(test_id: str):
     with open(test_path, "r") as f:
         test_data = json.load(f)
 
-    # Test has not been submitted
     if test_data["status"] == "active":
         raise HTTPException(
             status_code=400,
             detail="This test has not been submitted yet."
         )
 
-    # Evaluation is still in progress
     if test_data["status"] == "submitted":
-
         return {
             "test_id": test_id,
             "status": "submitted",
-            "message": (
-                "Evaluation in progress — "
-                "check back shortly."
-            )
+            "message": "Evaluation in progress — check back shortly."
         }
 
-    # Evaluation completed
     if test_data["status"] == "evaluated":
-
         results = test_data["results"]
-
         return {
             "test_id": test_id,
             "subject": test_data["subject"],
             "test_type": test_data["test_type"],
             "status": "evaluated",
-
-            "submitted_at": test_data.get(
-                "submitted_at"
-            ),
-
-            "evaluated_at": test_data.get(
-                "evaluated_at"
-            ),
-
-            "total_score": results[
-                "total_awarded"
-            ],
-
-            "total_marks": results[
-                "total_possible"
-            ],
-
-            "percentage": results[
-                "percentage"
-            ],
-
-            "section_breakdown": results.get(
-                "section_breakdown",
-                {}
-            ),
-
-            "questions": results[
-                "evaluated_questions"
-            ]
+            "submitted_at": test_data.get("submitted_at"),
+            "evaluated_at": test_data.get("evaluated_at"),
+            "total_score": results["total_awarded"],
+            "total_marks": results["total_possible"],
+            "percentage": results["percentage"],
+            "section_breakdown": results.get("section_breakdown", {}),
+            "questions": results["evaluated_questions"]
         }
 
-    raise HTTPException(
-        status_code=400,
-        detail="Unexpected test status."
-    )
+    raise HTTPException(status_code=400, detail="Unexpected test status.")
