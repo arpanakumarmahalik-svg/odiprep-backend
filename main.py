@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from routers import upload, test, results, proctoring
 import os
 
@@ -12,6 +13,19 @@ app = FastAPI(
 os.makedirs("uploads", exist_ok=True)
 os.makedirs("tests", exist_ok=True)
 os.makedirs("answer_sheets", exist_ok=True)
+
+# Allow frontend to talk to backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://odiprep-frontend.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Connect all routers
 app.include_router(upload.router)
