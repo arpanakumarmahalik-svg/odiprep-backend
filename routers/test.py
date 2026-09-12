@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from models.schemas import GenerateTestRequest
 from services.file_parser import extract_text
-from services.lockout import check_lock_status
 from services.exam_builder import (
     generate_section_a, generate_section_b, generate_section_c,
     generate_internal_exam, generate_viva_questions
 )
+from services.lockout import check_lock_status
 import json
 import uuid
 import os
@@ -62,8 +62,8 @@ def generate_test(request: GenerateTestRequest):
             status_code=422,
             detail="Could not extract text from the file."
         )
-    
-        # Step 2.5: Check if subject is locked (SCETVT and Internal only)
+
+    # Step 2.5: Check if subject is locked (SCETVT and Internal only)
     if request.test_type in ["scetvt", "internal"]:
         if request.user_id:
             lock = check_lock_status(
@@ -165,6 +165,7 @@ def generate_test(request: GenerateTestRequest):
         "subject": request.subject,
         "test_type": request.test_type,
         "file_id": request.file_id,
+        "user_id": request.user_id,
         "total_marks": total_marks,
         "duration_hours": duration_hours,
         "status": "active",
@@ -185,6 +186,7 @@ def generate_test(request: GenerateTestRequest):
         "test_type": request.test_type,
         "total_marks": total_marks,
         "duration_hours": duration_hours,
+        "duration_seconds": duration_hours * 3600,
         "status": "active",
         "created_at": created_at,
         "total_questions": total_q,
@@ -205,13 +207,80 @@ def get_test(test_id: str):
     with open(test_path, "r") as f:
         test_data = json.load(f)
 
+    sections = test_data.get("sections", {})
+    test_type = test_data.get("test_type", "scetvt")
+
+    # Build flat questions array for frontend
+    flat_questions = []
+
+    if test_type == "scetvt":
+        section_map = {
+            "section_a": "A",
+            "section_b": "B",
+            "section_c": "C"
+        }
+        for section_key, section_label in section_map.items():
+            section = sections.get(section_key, {})
+            for q in section.get("questions", []):
+                flat_questions.append({
+                    "id": f"{section_label}{q['question_no']}",
+                    "question_number": q["question_no"],
+                    "text": q["question"],
+                    "marks": q["marks"],
+                    "section": section_label
+                })
+
+    elif test_type == "internal":
+        internal = sections.get("internal", {})
+        for q in internal.get("questions", []):
+            flat_questions.append({
+                "id": f"I{q['question_no']}",
+                "question_number": q["question_no"],
+                "text": q.get("question", ""),
+                "marks": q["marks"],
+                "section": None,
+                "options": [
+                    q["option_a"]["question"],
+                    q["option_b"]["question"]
+                ]
+            })
+
+    elif test_type == "viva":
+        viva = sections.get("viva", {})
+        for q in viva.get("questions", []):
+            flat_questions.append({
+                "id": f"V{q['question_no']}",
+                "question_number": q["question_no"],
+                "text": q["question"],
+                "marks": 0,
+                "section": None,
+                "options": list(q.get("options", {}).values()),
+                "correct_answer": q.get("correct_answer"),
+                "explanation": q.get("explanation")
+            })
+
+    duration_hours = test_data.get("duration_hours", 3)
+    duration_seconds = duration_hours * 3600
+
     return {
         "test_id": test_data["test_id"],
         "subject": test_data["subject"],
         "test_type": test_data["test_type"],
         "total_marks": test_data["total_marks"],
-        "duration_hours": test_data["duration_hours"],
+        "duration_hours": duration_hours,
+        "duration_seconds": duration_seconds,
         "status": test_data["status"],
         "created_at": test_data["created_at"],
-        "sections": test_data["sections"]
+        "sections": sections,
+        "questions": flat_questions
+    }
+
+
+@router.get("/ask-ai")
+def ask_ai_test(question: str):
+    from services.gemini import ask_gemini
+    answer = ask_gemini(question)
+    return {
+        "question": question,
+        "answer": answer
     }
