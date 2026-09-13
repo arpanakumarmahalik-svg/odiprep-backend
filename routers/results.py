@@ -122,7 +122,7 @@ def run_evaluation(test_data: dict, saved_photos: list) -> dict:
 @router.post("/submit-test")
 async def submit_test(
     test_id: Annotated[str, Form()],
-    answer_sheets: Annotated[List[UploadFile], File()]
+    photos: Annotated[List[UploadFile], File()]
 ):
     # Step 1: Check test exists
     test_path = os.path.join("tests", f"{test_id}.json")
@@ -150,11 +150,11 @@ async def submit_test(
         "image/jpg",
         "image/webp"
     ]
-    for sheet in answer_sheets:
-        if sheet.content_type not in allowed_image_types:
+    for photo in photos:
+        if photo.content_type not in allowed_image_types:
             raise HTTPException(
                 status_code=400,
-                detail=f"Only image files allowed. Got: {sheet.content_type}"
+                detail=f"Only image files allowed. Got: {photo.content_type}"
             )
 
     # Step 5: Save uploaded photos
@@ -163,9 +163,9 @@ async def submit_test(
     submission_folder = os.path.join(ANSWER_SHEETS_FOLDER, submission_id)
     os.makedirs(submission_folder, exist_ok=True)
 
-    for index, sheet in enumerate(answer_sheets):
-        content = await sheet.read()
-        extension = sheet.filename.split(".")[-1].lower()
+    for index, photo in enumerate(photos):
+        content = await photo.read()
+        extension = photo.filename.split(".")[-1].lower()
         photo_filename = f"page_{index + 1}.{extension}"
         photo_path = os.path.join(submission_folder, photo_filename)
 
@@ -195,7 +195,6 @@ async def submit_test(
     try:
         evaluation_result = run_evaluation(test_data, saved_photos)
 
-        # Save results into test file
         test_data["status"] = "evaluated"
         test_data["results"] = evaluation_result
         test_data["evaluated_at"] = datetime.utcnow().isoformat()
@@ -205,7 +204,6 @@ async def submit_test(
 
         print(f"Evaluation complete! Score: {evaluation_result['total_awarded']}/{evaluation_result['total_possible']}")
 
-        # Step 8: Save to Supabase test history
         save_test_history(
             user_id=test_data.get("user_id", "anonymous"),
             test_id=test_id,
