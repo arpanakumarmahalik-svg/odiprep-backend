@@ -165,7 +165,7 @@ def generate_test(request: GenerateTestRequest):
         "subject": request.subject,
         "test_type": request.test_type,
         "file_id": request.file_id,
-        "user_id": request.user_id,
+        "user_id": request.user_id or "anonymous",
         "total_marks": total_marks,
         "duration_hours": duration_hours,
         "status": "active",
@@ -248,14 +248,22 @@ def get_test(test_id: str):
     elif test_type == "viva":
         viva = sections.get("viva", {})
         for q in viva.get("questions", []):
+            options_dict = q.get("options", {})
+            options_list = list(options_dict.values())
+            option_keys = list(options_dict.keys())
+            correct_letter = q.get("correct_answer", "A")
+
+            # Convert letter (A/B/C/D) to 0-based index
+            correct_index = option_keys.index(correct_letter) if correct_letter in option_keys else 0
+
             flat_questions.append({
                 "id": f"V{q['question_no']}",
                 "question_number": q["question_no"],
                 "text": q["question"],
                 "marks": 0,
                 "section": None,
-                "options": list(q.get("options", {}).values()),
-                "correct_answer": q.get("correct_answer"),
+                "options": options_list,
+                "correct_option": correct_index,
                 "explanation": q.get("explanation")
             })
 

@@ -21,14 +21,12 @@ async def upload_file(
     file: Annotated[UploadFile, File()],
     subject: Annotated[str, Form()] = ""
 ):
-    # Check file type
     if file.content_type not in ALLOWED_TYPES:
         raise HTTPException(
             status_code=400,
             detail="Only PDF, DOCX, PPT, and TXT files are allowed"
         )
 
-    # Read and save the file
     content = await file.read()
     file_id = str(uuid.uuid4())
     extension = file.filename.split(".")[-1].lower()
@@ -38,7 +36,6 @@ async def upload_file(
     with open(saved_path, "wb") as f:
         f.write(content)
 
-    # Extract text immediately after saving
     extracted_text = extract_text(saved_path)
 
     if not extracted_text:
