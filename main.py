@@ -9,15 +9,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Create required folders on startup
 os.makedirs("uploads", exist_ok=True)
 os.makedirs("tests", exist_ok=True)
 os.makedirs("answer_sheets", exist_ok=True)
 
-# Allow frontend to talk to backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://odiprep-react.vercel.app",
         "https://odiprep-frontend.vercel.app",
         "http://localhost:5173",
         "http://localhost:3000",
@@ -27,7 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Connect all routers
 app.include_router(upload.router)
 app.include_router(test.router)
 app.include_router(results.router)
