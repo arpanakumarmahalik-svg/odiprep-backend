@@ -214,5 +214,6 @@ async def submit_test(
         for group_no, choice in parsed_selections.items():
             if group_no not in valid_groups or choice not in ("a", "b"):
                 raise HTTPException(
-                    status_code=400,
-                    detail="Invalid selection. Choose only (a) or (b) for each
+                status_code=400,
+                detail="Invalid selection. Choose only (a) or (b) for each of the 4 groups."
+            )
