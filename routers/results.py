@@ -2,7 +2,6 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Annotated, List
 import os
 import uuid
-import json
 from datetime import datetime
 from services.gemini import (
     read_all_answer_sheets,
@@ -10,6 +9,7 @@ from services.gemini import (
     evaluate_answers
 )
 from services.supabase_service import save_test_history
+from services.test_store import load_test, update_test
 
 router = APIRouter()
 
@@ -124,17 +124,13 @@ async def submit_test(
     test_id: Annotated[str, Form()],
     photos: Annotated[List[UploadFile], File()]
 ):
-    # Step 1: Check test exists
-    test_path = os.path.join("tests", f"{test_id}.json")
-    if not os.path.exists(test_path):
+    # Step 1 and 2: Load test data
+    test_data = load_test(test_id)
+    if not test_data:
         raise HTTPException(
             status_code=404,
             detail=f"Test with ID {test_id} not found."
         )
-
-    # Step 2: Load test data
-    with open(test_path, "r") as f:
-        test_data = json.load(f)
 
     # Step 3: Check test is still active
     if test_data["status"] != "active":
@@ -187,8 +183,14 @@ async def submit_test(
     test_data["submission_id"] = submission_id
     test_data["answer_sheet_photos"] = saved_photos
 
-    with open(test_path, "w") as f:
-        json.dump(test_data, f, indent=2)
+    try:
+        update_test(test_data)
+    except Exception as e:
+        print(f"Error saving submission: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not save your submission. Please try again."
+        )
 
     # Step 7: Start evaluation automatically
     print("Starting evaluation...")
@@ -199,8 +201,7 @@ async def submit_test(
         test_data["results"] = evaluation_result
         test_data["evaluated_at"] = datetime.utcnow().isoformat()
 
-        with open(test_path, "w") as f:
-            json.dump(test_data, f, indent=2)
+        update_test(test_data)
 
         print(f"Evaluation complete! Score: {evaluation_result['total_awarded']}/{evaluation_result['total_possible']}")
 
@@ -230,16 +231,13 @@ async def submit_test(
 
 @router.get("/get-results/{test_id}")
 def get_results(test_id: str):
-    test_path = os.path.join("tests", f"{test_id}.json")
+    test_data = load_test(test_id)
 
-    if not os.path.exists(test_path):
+    if not test_data:
         raise HTTPException(
             status_code=404,
             detail=f"Test with ID {test_id} not found."
         )
-
-    with open(test_path, "r") as f:
-        test_data = json.load(f)
 
     if test_data["status"] == "active":
         raise HTTPException(

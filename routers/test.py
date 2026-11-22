@@ -6,7 +6,7 @@ from services.exam_builder import (
     generate_internal_exam, generate_viva_questions
 )
 from services.lockout import check_lock_status
-import json
+from services.test_store import save_test, load_test
 import uuid
 import os
 from datetime import datetime
@@ -174,9 +174,14 @@ def generate_test(request: GenerateTestRequest):
         "sections": questions_only
     }
 
-    test_path = os.path.join("tests", f"{test_id}.json")
-    with open(test_path, "w") as f:
-        json.dump(full_test, f, indent=2)
+    try:
+        save_test(full_test)
+    except Exception as e:
+        print(f"Error saving test: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not save the test. Please try again."
+        )
 
     print(f"Test saved: {test_id}")
 
@@ -196,16 +201,13 @@ def generate_test(request: GenerateTestRequest):
 
 @router.get("/get-test/{test_id}")
 def get_test(test_id: str):
-    test_path = os.path.join("tests", f"{test_id}.json")
+    test_data = load_test(test_id)
 
-    if not os.path.exists(test_path):
+    if not test_data:
         raise HTTPException(
             status_code=404,
             detail=f"Test with ID {test_id} not found."
         )
-
-    with open(test_path, "r") as f:
-        test_data = json.load(f)
 
     sections = test_data.get("sections", {})
     test_type = test_data.get("test_type", "scetvt")
