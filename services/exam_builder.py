@@ -92,30 +92,77 @@ Study Notes:
     return parse_json_response(response, "Section C")
 
 
+def _clean_internal_groups(groups) -> list:
+    """
+    Check and clean the Internal Exam structure.
+    Returns exactly 4 groups, each with option_a and option_b (8 questions total).
+    Returns [] if the structure is wrong.
+    """
+    if not isinstance(groups, list) or len(groups) < 4:
+        return []
+
+    cleaned = []
+    for group in groups[:4]:
+        if not isinstance(group, dict):
+            return []
+
+        option_a = group.get("option_a")
+        option_b = group.get("option_b")
+
+        if not isinstance(option_a, dict) or not isinstance(option_b, dict):
+            return []
+
+        question_a = str(option_a.get("question", "")).strip()
+        question_b = str(option_b.get("question", "")).strip()
+
+        if not question_a or not question_b:
+            return []
+
+        cleaned.append({
+            "question_no": len(cleaned) + 1,
+            "option_a": {
+                "question": question_a,
+                "expected_answer": str(option_a.get("expected_answer", "")).strip()
+            },
+            "option_b": {
+                "question": question_b,
+                "expected_answer": str(option_b.get("expected_answer", "")).strip()
+            },
+            "marks": 5
+        })
+
+    return cleaned
+
+
 def generate_internal_exam(notes_text: str) -> list:
     prompt = f"""
 You are an expert exam paper setter for SCETVT Odisha polytechnic internal exams.
 
-Using the study notes below, generate exactly 8 questions for an Internal Exam.
+Using the study notes below, create an Internal Exam with exactly 4 groups.
+Each group has exactly 2 alternative questions: question (a) and question (b).
+So the paper has exactly 8 questions in total (4 groups x 2 questions).
 
 Rules:
-- Each question number has TWO choices: option (a) and option (b)
-- Both options in a question must cover similar topics but be worded differently
+- Create exactly 4 groups. Not more, not less.
+- Each group has exactly 2 questions: option_a and option_b
+- The student will choose only ONE question from each group
+- Both questions in a group must cover a similar topic but be worded differently
+- Different groups must cover different parts of the notes
 - Each question carries 5 marks
-- Student will attempt any 4 questions out of 8
 - Questions must come directly from the notes content
+- Use simple, clear language for polytechnic students
 
-Return ONLY a valid JSON array in this exact format, nothing else:
+Return ONLY a valid JSON array with exactly 4 items, in this exact format, nothing else:
 [
   {{
     "question_no": 1,
     "option_a": {{
-      "question": "Write option A question here?",
-      "expected_answer": "Write correct answer for option A here."
+      "question": "Write question 1(a) here?",
+      "expected_answer": "Write correct answer for 1(a) here."
     }},
     "option_b": {{
-      "question": "Write option B question here?",
-      "expected_answer": "Write correct answer for option B here."
+      "question": "Write question 1(b) here?",
+      "expected_answer": "Write correct answer for 1(b) here."
     }},
     "marks": 5
   }}
@@ -124,8 +171,16 @@ Return ONLY a valid JSON array in this exact format, nothing else:
 Study Notes:
 {notes_text[:3000]}
 """
-    response = ask_gemini(prompt)
-    return parse_json_response(response, "Internal Exam")
+    for attempt in range(1, 4):
+        response = ask_gemini(prompt)
+        groups = _clean_internal_groups(
+            parse_json_response(response, "Internal Exam")
+        )
+        if groups:
+            return groups
+        print(f"Internal Exam structure invalid (attempt {attempt}/3). Retrying...")
+
+    return []
 
 
 def generate_viva_questions(notes_text: str) -> list:

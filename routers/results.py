@@ -1,6 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Annotated, List
 import os
+import json
 import uuid
 from datetime import datetime
 from services.gemini import (
@@ -16,7 +17,45 @@ router = APIRouter()
 ANSWER_SHEETS_FOLDER = "answer_sheets"
 
 
-def run_evaluation(test_data: dict, saved_photos: list) -> dict:
+def build_internal_questions(groups: list, selections: dict):
+    """
+    Build the question lists for an Internal exam.
+    Returns (all_questions, questions_to_grade).
+    - all_questions: one entry per group (4 total)
+    - questions_to_grade: only the groups where the student chose (a) or (b)
+    """
+    all_questions = []
+    questions_to_grade = []
+
+    for group in groups:
+        group_no = group["question_no"]
+        choice = selections.get(str(group_no))
+
+        if choice in ("a", "b"):
+            option = group["option_a"] if choice == "a" else group["option_b"]
+            item = {
+                "question_no": group_no,
+                "question": f"({choice}) {option['question']}",
+                "expected_answer": option.get("expected_answer", ""),
+                "marks": group.get("marks", 5),
+            }
+            all_questions.append(item)
+            questions_to_grade.append(item)
+        else:
+            all_questions.append({
+                "question_no": group_no,
+                "question": (
+                    f"Not selected. (a) {group['option_a']['question']} "
+                    f"OR (b) {group['option_b']['question']}"
+                ),
+                "expected_answer": "",
+                "marks": group.get("marks", 5),
+            })
+
+    return all_questions, questions_to_grade
+
+
+def run_evaluation(test_data: dict, saved_photos: list, selections: dict) -> dict:
     """
     Full evaluation pipeline:
     Read handwriting → Match answers → Evaluate marks
@@ -40,23 +79,32 @@ def run_evaluation(test_data: dict, saved_photos: list) -> dict:
         section_b_qs = sections_with_answers["section_b"]["questions"]
         section_c_qs = sections_with_answers["section_c"]["questions"]
         all_questions = section_a_qs + section_b_qs + section_c_qs
+        questions_to_grade = all_questions
         total_marks = 70
 
     elif test_type == "internal":
-        all_questions = sections_with_answers["internal"]["questions"]
+        groups = sections_with_answers["internal"]["questions"]
+        all_questions, questions_to_grade = build_internal_questions(
+            groups, selections
+        )
         total_marks = 20
 
     else:
         all_questions = []
+        questions_to_grade = []
         total_marks = 0
 
-    # Step 4: Match answers to questions
-    print("Matching answers to questions...")
-    matched = match_answers_to_questions(extracted_text, all_questions, test_type)
+    # Step 4 and 5: Match answers and evaluate (only chosen questions)
+    if questions_to_grade:
+        print("Matching answers to questions...")
+        matched = match_answers_to_questions(
+            extracted_text, questions_to_grade, test_type
+        )
 
-    # Step 5: Evaluate and assign marks
-    print("Evaluating answers...")
-    evaluation = evaluate_answers(matched, all_questions, test_type)
+        print("Evaluating answers...")
+        evaluation = evaluate_answers(matched, questions_to_grade, test_type)
+    else:
+        evaluation = {"evaluated_questions": []}
 
     # Step 6: Fill in unattempted questions with 0 marks
     evaluated_q_nos = [q["question_no"] for q in evaluation["evaluated_questions"]]
@@ -122,7 +170,8 @@ def run_evaluation(test_data: dict, saved_photos: list) -> dict:
 @router.post("/submit-test")
 async def submit_test(
     test_id: Annotated[str, Form()],
-    photos: Annotated[List[UploadFile], File()]
+    photos: Annotated[List[UploadFile], File()],
+    selections: Annotated[str, Form()] = ""
 ):
     # Step 1 and 2: Load test data
     test_data = load_test(test_id)
@@ -139,133 +188,31 @@ async def submit_test(
             detail=f"This test is already {test_data['status']}."
         )
 
-    # Step 4: Validate image files
-    allowed_image_types = [
-        "image/jpeg",
-        "image/png",
-        "image/jpg",
-        "image/webp"
-    ]
-    for photo in photos:
-        if photo.content_type not in allowed_image_types:
+    # Step 3.5: Validate Internal exam selections
+    # Format: {"1": "a", "2": "b", "3": "a", "4": "b"}
+    parsed_selections = {}
+    if test_data["test_type"] == "internal":
+        if selections:
+            try:
+                parsed_selections = json.loads(selections)
+            except Exception:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid selections format."
+                )
+
+        if not isinstance(parsed_selections, dict):
             raise HTTPException(
                 status_code=400,
-                detail=f"Only image files allowed. Got: {photo.content_type}"
+                detail="Invalid selections format."
             )
 
-    # Step 5: Save uploaded photos
-    submission_id = str(uuid.uuid4())
-    saved_photos = []
-    submission_folder = os.path.join(ANSWER_SHEETS_FOLDER, submission_id)
-    os.makedirs(submission_folder, exist_ok=True)
-
-    for index, photo in enumerate(photos):
-        content = await photo.read()
-        extension = photo.filename.split(".")[-1].lower()
-        photo_filename = f"page_{index + 1}.{extension}"
-        photo_path = os.path.join(submission_folder, photo_filename)
-
-        with open(photo_path, "wb") as f:
-            f.write(content)
-
-        saved_photos.append({
-            "page_number": index + 1,
-            "filename": photo_filename,
-            "path": photo_path,
-            "size_kb": round(len(content) / 1024, 2)
-        })
-
-    print(f"Saved {len(saved_photos)} photos for test {test_id}")
-
-    # Step 6: Update status to submitted
-    test_data["status"] = "submitted"
-    test_data["submitted_at"] = datetime.utcnow().isoformat()
-    test_data["submission_id"] = submission_id
-    test_data["answer_sheet_photos"] = saved_photos
-
-    try:
-        update_test(test_data)
-    except Exception as e:
-        print(f"Error saving submission: {type(e).__name__}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Could not save your submission. Please try again."
-        )
-
-    # Step 7: Start evaluation automatically
-    print("Starting evaluation...")
-    try:
-        evaluation_result = run_evaluation(test_data, saved_photos)
-
-        test_data["status"] = "evaluated"
-        test_data["results"] = evaluation_result
-        test_data["evaluated_at"] = datetime.utcnow().isoformat()
-
-        update_test(test_data)
-
-        print(f"Evaluation complete! Score: {evaluation_result['total_awarded']}/{evaluation_result['total_possible']}")
-
-        save_test_history(
-            user_id=test_data.get("user_id", "anonymous"),
-            test_id=test_id,
-            subject=test_data["subject"],
-            test_type=test_data["test_type"],
-            total_score=float(evaluation_result["total_awarded"]),
-            total_marks=int(evaluation_result["total_possible"]),
-            percentage=float(evaluation_result["percentage"]),
-            status="evaluated"
-        )
-
-    except Exception as e:
-        print(f"Evaluation error: {e}")
-
-    return {
-        "submission_id": submission_id,
-        "test_id": test_id,
-        "subject": test_data["subject"],
-        "pages_received": len(saved_photos),
-        "status": test_data["status"],
-        "message": "Answer sheets received and evaluation complete! Call /get-results to see your marks."
-    }
-
-
-@router.get("/get-results/{test_id}")
-def get_results(test_id: str):
-    test_data = load_test(test_id)
-
-    if not test_data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Test with ID {test_id} not found."
-        )
-
-    if test_data["status"] == "active":
-        raise HTTPException(
-            status_code=400,
-            detail="This test has not been submitted yet."
-        )
-
-    if test_data["status"] == "submitted":
-        return {
-            "test_id": test_id,
-            "status": "submitted",
-            "message": "Evaluation in progress — check back shortly."
+        valid_groups = {
+            str(g["question_no"])
+            for g in test_data["sections_with_answers"]["internal"]["questions"]
         }
-
-    if test_data["status"] == "evaluated":
-        results = test_data["results"]
-        return {
-            "test_id": test_id,
-            "subject": test_data["subject"],
-            "test_type": test_data["test_type"],
-            "status": "evaluated",
-            "submitted_at": test_data.get("submitted_at"),
-            "evaluated_at": test_data.get("evaluated_at"),
-            "total_score": results["total_awarded"],
-            "total_marks": results["total_possible"],
-            "percentage": results["percentage"],
-            "section_breakdown": results.get("section_breakdown", {}),
-            "questions": results["evaluated_questions"]
-        }
-
-    raise HTTPException(status_code=400, detail="Unexpected test status.")
+        for group_no, choice in parsed_selections.items():
+            if group_no not in valid_groups or choice not in ("a", "b"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid selection. Choose only (a) or (b) for each

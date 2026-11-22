@@ -87,6 +87,12 @@ def generate_test(request: GenerateTestRequest):
         print("Generating Section C...")
         section_c = generate_section_c(notes_text)
 
+        if not section_a or not section_b or not section_c:
+            raise HTTPException(
+                status_code=502,
+                detail="The AI could not generate the full exam. Please try again."
+            )
+
         questions_only = {
             "section_a": {
                 "title": "Section A",
@@ -117,10 +123,16 @@ def generate_test(request: GenerateTestRequest):
         print("Generating Internal Exam questions...")
         internal_questions = generate_internal_exam(notes_text)
 
+        if len(internal_questions) != 4:
+            raise HTTPException(
+                status_code=502,
+                detail="The AI could not generate the Internal exam correctly. Please try again."
+            )
+
         questions_only = {
             "internal": {
                 "title": "Internal Exam",
-                "instruction": "Answer any 4 out of 8 questions. For each question, answer either option (a) or (b). 5 marks each.",
+                "instruction": "There are 4 groups. Each group has 2 questions, (a) and (b). Choose any ONE question from each group. Answer exactly 4 questions. 5 marks each.",
                 "questions": strip_internal_answers(internal_questions)
             }
         }
@@ -132,11 +144,17 @@ def generate_test(request: GenerateTestRequest):
         }
         total_marks = 20
         duration_hours = 1
-        total_q = len(internal_questions)
+        total_q = len(internal_questions) * 2
 
     elif request.test_type == "viva":
         print("Generating Viva questions...")
         viva_questions = generate_viva_questions(notes_text)
+
+        if not viva_questions:
+            raise HTTPException(
+                status_code=502,
+                detail="The AI could not generate the viva questions. Please try again."
+            )
 
         questions_only = {
             "viva": {
@@ -238,9 +256,11 @@ def get_test(test_id: str):
             flat_questions.append({
                 "id": f"I{q['question_no']}",
                 "question_number": q["question_no"],
+                "group_no": q["question_no"],
                 "text": q.get("question", ""),
                 "marks": q["marks"],
                 "section": None,
+                "option_labels": ["a", "b"],
                 "options": [
                     q["option_a"]["question"],
                     q["option_b"]["question"]
